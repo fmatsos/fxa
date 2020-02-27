@@ -540,7 +540,7 @@ MysqlStore.prototype = {
    * @param {String} uid User ID as hex
    * @returns {Promise}
    */
-  getRefreshTokensByUid: async function getRefreshTokensByUid(uid) {
+  _getRefreshTokensByUid: async function _getRefreshTokensByUid(uid) {
     const refreshTokens = await this._read(QUERY_LIST_REFRESH_TOKENS_BY_UID, [
       buf(uid),
     ]);
@@ -643,7 +643,7 @@ MysqlStore.prototype = {
     });
   },
 
-  getRefreshToken: function getRefreshToken(token) {
+  _getRefreshToken: function _getRefreshToken(token) {
     return this._readOne(QUERY_REFRESH_TOKEN_FIND, [buf(token)]).then(function(
       t
     ) {
@@ -654,16 +654,15 @@ MysqlStore.prototype = {
     });
   },
 
-  usedRefreshToken: function usedRefreshToken(token) {
-    var now = new Date();
+  touchRefreshToken: function touchRefreshToken(token, now) {
     return this._write(QUERY_REFRESH_TOKEN_LAST_USED_UPDATE, [
       now,
       // WHERE
-      token,
+      buf(token),
     ]);
   },
 
-  removeRefreshToken: function removeRefreshToken(id) {
+  _removeRefreshToken: function _removeRefreshToken(id) {
     return this._write(QUERY_REFRESH_TOKEN_DELETE, [buf(id)]);
   },
 

@@ -333,12 +333,13 @@ async function validateRefreshTokenGrant(client, params) {
   if (tokObj.offline) {
     throw AppError.invalidRequestParameter();
   }
-  // Periodically update last-used-at timestamp in the db.
-  // We don't do this every time because of the write load.
+  // Update last-used-at timestamp in the db.
+  // The db stores this in redis to reduce impact of write load.
+  await db.touchRefreshToken(tokObj);
+
   var now = new Date();
   var lastUsedAt = tokObj.lastUsedAt;
   if (now - lastUsedAt > REFRESH_LAST_USED_AT_UPDATE_AFTER_MS) {
-    await db.usedRefreshToken(encrypt.hash(params.refresh_token));
     logger.debug('usedRefreshToken.updated', { now });
   } else {
     logger.debug('usedRefreshToken.not_updated');

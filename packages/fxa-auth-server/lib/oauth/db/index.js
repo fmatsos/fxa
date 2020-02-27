@@ -31,10 +31,15 @@ class OauthDB {
       await preClients();
       await scopes();
     });
-    this.redis = redis(
+    this.redisAccessTokens = redis(
       { ...config.get('redis.accessTokens'), enabled: true },
       logger
     );
+    this.redisRefreshTokens = redis(
+      { ...config.get('redis.refreshTokens') },
+      logger
+    );
+
     Object.keys(mysql.prototype).forEach(key => {
       const self = this;
       this[key] = async function() {
@@ -43,6 +48,7 @@ class OauthDB {
       };
     });
   }
+
   disconnect() {}
 
   async generateAccessToken(vals) {
@@ -68,13 +74,13 @@ class OauthDB {
       const db = await this.mysql;
       await db._generateAccessToken(token);
     } else {
-      await this.redis.setAccessToken(token);
+      await this.redisAccessTokens.setAccessToken(token);
     }
     return token;
   }
 
   async getAccessToken(id) {
-    const t = await this.redis.getAccessToken(id);
+    const t = await this.redisAccessTokens.getAccessToken(id);
     if (t) {
       return t;
     }
@@ -83,7 +89,7 @@ class OauthDB {
   }
 
   async removeAccessToken(id) {
-    const done = await this.redis.removeAccessToken(id);
+    const done = await this.redisAccessTokens.removeAccessToken(id);
     if (!done) {
       const db = await this.mysql;
       return db._removeAccessToken(id);
@@ -91,7 +97,7 @@ class OauthDB {
   }
 
   async getActiveClientsByUid(uid) {
-    const tokens = await this.redis.getAccessTokens(uid);
+    const tokens = await this.redisAccessTokens.getAccessTokens(uid);
     const activeClientTokens = [];
     for (const token of tokens) {
       if (!token.canGrant) {
@@ -104,20 +110,68 @@ class OauthDB {
   }
 
   async getAccessTokensByUid(uid) {
-    const tokens = await this.redis.getAccessTokens(uid);
+    const tokens = await this.redisAccessTokens.getAccessTokens(uid);
     const db = await this.mysql;
     const otherTokens = await db._getAccessTokensByUid(uid);
     return tokens.concat(otherTokens);
   }
 
+  async getRefreshToken(id) {
+    const db = await this.mysql;
+    const t = db._getRefreshToken(id);
+    if (t) {
+      const extraMetadata = await this.redisRefreshTokens.getRefreshTokens(
+        hex(t.userid)
+      );
+      Object.assign(t, extraMetadata[hex(id)] || {});
+    }
+    return t;
+  }
+
+  async getRefreshTokensByUid(uid) {
+    const db = await this.mysql;
+    const tokens = await db._getRefreshTokensByUid(uid);
+    const extraMetadata = await this.redisRefreshTokens.getRefreshTokens(uid);
+    for (const t of tokens) {
+      Object.assign(t, extraMetadata[hex(t.id)] || {});
+    }
+    return tokens;
+  }
+
+  async touchRefreshToken(token) {
+    const now = new Date();
+    await this.redisRefreshTokens.touchRefreshToken(
+      hex(token.userid),
+      hex(token.token),
+      now
+    );
+    // TODO: maybe write back to the db on occasion, or nah?
+    // const db = await this.mysql;
+    // await db.touchRefreshToken(token.token, now)
+  }
+
+  async removeRefreshToken(id) {
+    await this.redisRefreshTokens.removeRefreshToken(id);
+    const db = await this.mysql;
+    return db._removeRefreshToken(id);
+  }
+
   async removePublicAndCanGrantTokens(userId) {
-    await this.redis.removeAccessTokensForPublicClients(userId);
+    await this.redisAccessTokens.removeAccessTokensForPublicClients(userId);
+    await this.redisRefreshTokens.removeRefreshTokensForPublicClients(userId);
     const db = await this.mysql;
     await db._removePublicAndCanGrantTokens(userId);
   }
 
   async deleteClientAuthorization(clientId, uid) {
-    await this.redis.removeAccessTokensForUserAndClient(uid, clientId);
+    await this.redisAccessTokens.removeAccessTokensForUserAndClient(
+      uid,
+      clientId
+    );
+    await this.redisRefreshTokens.removeRefreshTokensForUserAndClient(
+      uid,
+      clientId
+    );
     const db = await this.mysql;
     return db._deleteClientAuthorization(clientId, uid);
   }
@@ -130,13 +184,17 @@ class OauthDB {
       uid
     );
     if (ok) {
-      await this.redis.removeAccessTokensForUserAndClient(uid, clientId);
+      await this.redisRefreshTokens.removeRefreshToken(uid, refreshTokenId);
+      await this.redisAccessTokens.removeAccessTokensForUserAndClient(
+        uid,
+        clientId
+      );
     }
     return ok;
   }
 
   async removeUser(uid) {
-    await this.redis.removeAccessTokensForUser(uid);
+    await this.redisAccessTokens.removeAccessTokensForUser(uid);
     const db = await this.mysql;
     await db._removeUser(uid);
   }
